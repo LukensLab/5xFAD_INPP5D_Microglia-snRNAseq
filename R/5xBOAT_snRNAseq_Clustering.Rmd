@@ -1,0 +1,537 @@
+---
+title: "5xBOAT_snRNAseq_Clustering"
+author: "Joshua Samuels"
+date: "10/27/2022"
+output: html_document
+---
+
+
+#### Load Packages
+
+```{r, message=FALSE, warning=FALSE}
+# Load Packages
+library(Seurat)
+library(tidyverse)
+library(Matrix)
+library(scales)
+library(cowplot)
+library(RCurl)
+library(ggridges)
+library(BiocManager)
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+library(patchwork)
+library(ggraph)
+library(clustree)
+library(metap)
+library(limma)
+```
+
+
+#### Load the post-integrated seurat object
+```{r}
+seurat_integrated <-readRDS(
+  "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratObjects/sct_seurat_10.27.22.rds")
+
+# # if moving directly from the 5xBOAT_snRNAseq_QC_and_Integration script, simply change the name of the post-integrated seurat object and then remove the original post-integrated seurat object
+# seurat_integrated <- sct_seurat
+# rm(sct_seurat)
+```
+
+
+#### Determine dimensionality and resolution
+
+##### PCA and UMAP
+```{r}
+# use integrated data to assess dimensionality and resolution
+DefaultAssay(seurat_integrated) <- "integrated"
+
+### PCA
+# Run PCA
+seurat_integrated <- RunPCA(object = seurat_integrated, verbose = FALSE)
+
+### Check dimensionality
+ElbowPlot(seurat_integrated, ndims = 50)
+
+### UMAP
+# Run UMAP
+# I am using a very high dimensionality since SCTransform allows for higher dimensionality - see Seurat "Using sctransform in Seurat" vignette - https://satijalab.org/seurat/articles/sctransform_vignette.html
+seurat_integrated <- RunUMAP(seurat_integrated, reduction = "pca", dims = 1:40, verbose = FALSE)
+```
+
+
+##### Testing clustering Resolutions
+```{r}
+### Clustering
+# Determine the K-nearest neighbor graph
+seurat_integrated <- FindNeighbors(object = seurat_integrated, dims = 1:40, verbose = FALSE)
+
+# Determine the clusters for various resolutions                                
+seurat_integrated <- FindClusters(object = seurat_integrated,
+                               resolution = c(0.1, 0.2, 0.3, 0.4, 0.8))
+
+# Plot UMAPs for various clustering resolutions
+# Assign identity of clusters based on resolution
+Idents(object = seurat_integrated) <- "integrated_snn_res.0.1"
+# Plot the UMAP
+res.1 <- DimPlot(seurat_integrated,
+        reduction = "umap",
+        label = TRUE,
+        label.size = 6)
+res.1
+
+Idents(object = seurat_integrated) <- "integrated_snn_res.0.2"
+# Plot the UMAP
+res.2 <- DimPlot(seurat_integrated,
+        reduction = "umap",
+        label = TRUE,
+        label.size = 6)
+res.2
+
+Idents(object = seurat_integrated) <- "integrated_snn_res.0.3"
+# Plot the UMAP
+res.3 <- DimPlot(seurat_integrated,
+        reduction = "umap",
+        label = TRUE,
+        label.size = 6)
+res.3
+
+# Assign identity of clusters based on resolution
+Idents(object = seurat_integrated) <- "integrated_snn_res.0.4"
+# Plot the UMAP
+res.4 <- DimPlot(seurat_integrated,
+        reduction = "umap",
+        label = TRUE,
+        label.size = 6)
+res.4
+
+# Assign identity of clusters based on resolution
+Idents(object = seurat_integrated) <- "integrated_snn_res.0.8"
+# Plot the UMAP
+res.8 <- DimPlot(seurat_integrated,
+        reduction = "umap",
+        label = TRUE,
+        label.size = 6)
+res.8
+```
+
+```{r}
+# Choose a resolution value! 
+# Assign identity of clusters based on resolution of choice
+Idents(object = seurat_integrated) <- "integrated_snn_res.0.1"
+# Plot the UMAP
+res.1 <- DimPlot(seurat_integrated,
+        reduction = "umap",
+        label = TRUE,
+        label.size = 6)
+res.1
+
+# change name of seurat object to clustered_seurat
+seurat_clustered <- seurat_integrated
+```
+
+```{r}
+# remove unused resolution plots from the environment
+rm(res.2)
+rm(res.3)
+rm(res.4)
+rm(res.8)
+rm(seurat_integrated)
+```
+
+
+#### Observe final clustered UMAP
+```{r}
+# final clustered UMAP (should match the UMAP with the chosen resolution above)
+p1 <- DimPlot(seurat_clustered, reduction = "umap", label = TRUE)
+# final clustered UMAP grouped by sample (able to observe overlap to suggest good integration)
+p2 <- DimPlot(seurat_clustered, reduction = "umap", group.by = "sample")
+
+p1
+p2
+```
+
+
+#### Extract and save the number of cells per cluster
+```{r}
+# Extract identity and sample information from seurat object to determine the number of cells per cluster per sample
+n_cells <- FetchData(seurat_clustered, 
+                     vars = c("ident", "sample")) %>%
+        dplyr::count(ident, sample) %>%
+        tidyr::spread(ident, n)
+
+# View table
+View(n_cells)
+
+# Save the number of cells per cluster as a .csv file
+write.csv(n_cells, file = 
+            "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratDataFiles/nCells_res0.1_10.28.22.csv")
+```
+
+```{r}
+# remove unused data from the environment
+rm(n_cells)
+rm(res.1)
+```
+
+
+#### Analyzing Cluster Identities
+
+```{r}
+# use RNA data to assess gene expression contributing to clustering
+DefaultAssay(seurat_clustered) <- "RNA"
+
+# DefaultAssay(seurat_clustered) <- "SCT"
+# seurat_clustered <- PrepSCTFindMarkers(seurat_clustered)
+```
+
+
+##### Using canonical markers
+```{r}
+# identify canonical cell type marker genes that are conserved across conditions
+# will need to do this for individual clusters
+
+# Cluster 5
+all.conserved.markers.5 <- FindConservedMarkers(seurat_clustered, ident.1 = 5, grouping.var = "sample", verbose = FALSE, assay = "RNA")
+```
+
+
+##### Using FindAllMarkers
+```{r}
+# Find all sig markers for each cluster compared to all other clusters. Save list to ".csv" file.
+All_Sig_Markers <- FindAllMarkers(
+  seurat_clustered, only.pos = T, logfc.threshold = 0.25, assay = "RNA")
+
+# Prepare the list of Sig markers
+All_Sig_Markers_List <- All_Sig_Markers %>%
+  group_by(cluster) %>%
+  top_n(n = 100, wt = avg_log2FC)
+
+# Export Sig markers to .csv file. Make sure to save file as .xls file!
+write.csv(All_Sig_Markers_List, file = 
+            "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratDataFiles/AllSigMarkers_res0.1_11.13.22.csv")
+```
+
+```{r}
+# Remove unused data from the environment
+rm(All_Sig_Markers)
+rm(All_Sig_Markers_List)
+```
+
+
+###### Test Gene Expression Across Clusters
+```{r}
+# use a feature plot to show genes of interest
+FeaturePlot(seurat_clustered,
+            reduction = "umap", 
+            features = c("nUMI","nGene", "mitoRatio", "log10GenesPerUMI", "Hexb", "P2ry12", "Cx3cr1", "C1qa", "Csf1r", "Sall1", "Fcrls", "Nrxn3", "Mapt", "Mbp", "Kcnip4", "Lingo2"),
+            # split.by = "sample",
+            order = TRUE,
+            # min.cutoff = 'q10',
+            label = TRUE,
+            cols = c("lightgrey", "red"),
+            pt.size = .8,
+            combine = F)
+```
+
+```{r}
+# Create stacked violin plot
+
+# Used code from this place https://divingintogeneticsandgenomics.rbind.io/post/stacked-violin-plot-for-visualizing-single-cell-data-in-seurat/
+# remove the x-axis text and tick
+# plot.margin to adjust the white space between each plot.
+# ... pass any arguments to VlnPlot in Seurat
+modify_vlnplot<- function(obj, 
+                          feature, 
+                          pt.size = 0, 
+                          plot.margin = unit(c(-0.75, 0, -0.75, 0), "cm"),
+                          ...) {
+  p<- VlnPlot(obj, features = feature, pt.size = pt.size, ... )  + 
+    xlab("") + ylab(feature) + ggtitle("") + 
+    theme(legend.position = "none", 
+          axis.text.x = element_blank(), 
+          axis.ticks.x = element_blank(), 
+          axis.title.y = element_text(size = rel(1), angle = 0), 
+          axis.text.y = element_text(size = rel(1)), 
+          plot.margin = plot.margin ) 
+  return(p)
+}
+
+## extract the max value of the y axis
+extract_max<- function(p){
+  ymax<- max(ggplot_build(p)$layout$panel_scales_y[[1]]$range$range)
+  return(ceiling(ymax))
+}
+
+
+## main function
+StackedVlnPlot<- function(obj, features,
+                          pt.size = 0, 
+                          plot.margin = unit(c(-0.75, 0, -0.75, 0), "cm"),
+                          ...) {
+  
+  plot_list<- purrr::map(features, function(x) modify_vlnplot(obj = obj,feature = x, ...))
+  
+  # Add back x-axis title to bottom plot. patchwork is going to support this?
+  plot_list[[length(plot_list)]]<- plot_list[[length(plot_list)]] +
+    theme(axis.text.x=element_text(), axis.ticks.x = element_line())
+  
+  # change the y-axis tick to only max value 
+  ymaxs<- purrr::map_dbl(plot_list, extract_max)
+  plot_list<- purrr::map2(plot_list, ymaxs, function(x,y) x + 
+                            scale_y_continuous(breaks = c(y)) + 
+                            expand_limits(y = y))
+
+  p<- patchwork::wrap_plots(plotlist = plot_list, ncol = 1)
+  return(p)
+  
+#### Now able to use: StackedVlnPlot() to create a stacked violin plot that is easy to read with multipe features
+}
+```
+
+```{r}
+# use a stacked violin plot to show genes of interest
+# Any feature that is not detected will cause an error. Features not found must be commented out and then rerun.
+
+StackedVlnPlot(obj = seurat_clustered, features = c("Hexb", "P2ry12", "Cx3cr1", "C1qa", "Csf1r", "Dock8", "Lrmda"))
+```
+
+
+#### Save clustered Seurat
+```{r}
+# Create .RData object to load at any time
+saveRDS(seurat_clustered, file=
+          "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratObjects/seurat_clustered_11.3.22.rds")
+```
+
+<!-- #### Load Clustered Seurat -->
+<!-- ```{r} -->
+<!-- seurat_clustered <-readRDS( -->
+<!--   "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratObjects/seurat_clustered_10.28.22.rds") -->
+<!-- ``` -->
+
+
+#### Modify Clusters
+
+#####
+```{r}
+# visualize unlabeled seurat
+p3<- DimPlot(object = seurat_clustered, 
+        reduction = "umap", repel = T, label.box = T, pt.size = .8, cols = c(
+        "skyblue1",
+        "lightcoral",
+        "palegreen",
+        "violet",
+        "sandybrown",
+        "cyan",
+        "peachpuff3",
+        "slateblue1",
+        "lightpink",
+        "firebrick1",
+        "green",
+        "lightcyan2",
+        "palevioletred",
+        "darkseagreen2",
+        "chocolate3",
+        "grey75",
+        "yellow"))
+p3
+LabelClusters(plot=p3, id= "ident", repel = F) + NoLegend()
+```
+
+
+```{r}
+# Save last plot that was printed
+# Before saving, set your size and dpi (quality)
+# ggsave("FileName.FileType", path = "path/path", width = , height = , units = "cm", dpi = 500)
+
+ggsave("full_seurat_umap_numbered_11.15.22.tiff", 
+       path = "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratDataFiles/UMAPs/", 
+       height = 5, 
+       width = 7, 
+       dpi = 500)
+```
+
+
+##### Rename and Merge Clusters
+```{r}
+# Assign identity of clusters based on resolution of choice
+Idents(object = seurat_clustered) <- "integrated_snn_res.0.1"
+
+
+# Rename all identities ("old cluster name" = "new cluster name")
+# Clusters with the same name will be merged together
+seurat_clustered_labeled <- RenameIdents(seurat_clustered, 
+                               "0" = "Glutamatergic Neuron 1",
+                               "1" = "Glutamatergic Neuron 2",
+                               "2" = "Astrocyte",
+                               "3" = "Glutamatergic Neuron 3",
+                               "4" = "Oligodendrocyte",
+                               "5" = "Microglia",
+                               "6" = "GABAergic Neuron 1",
+                               "7" = "GABAergic Neuron 2",
+                               "8" = "GABAergic Neuron 3",
+                               "9" = "VLMC",
+                               "10" = "OPC",
+                               "11" = "Neuron 1",
+                               "12" = "Neuron 2",
+                               "13" = "Neuron 3",
+                               "14" = "Endothelial Cell",
+                               "15" = "Neuron 4",
+			                         "16" = "Pericyte/SMC"
+			                         )
+```
+
+```{r}
+# Remove unused data from the environment
+rm(seurat_clustered)
+```
+
+
+##### Plot Fully Labeled UMAP
+```{r}
+# Label the UMAP with your cluster names set above and remove the legend
+p3L<- DimPlot(object = seurat_clustered_labeled, 
+        reduction = "umap", repel = T, label.box = T, pt.size = .8, cols = c(
+        "skyblue1",
+        "lightcoral",
+        "palegreen",
+        "violet",
+        "sandybrown",
+        "cyan",
+        "peachpuff3",
+        "slateblue1",
+        "lightpink",
+        "firebrick1",
+        "green",
+        "lightcyan2",
+        "palevioletred",
+        "darkseagreen2",
+        "chocolate3",
+        "grey75",
+        "yellow"))
+p3L
+LabelClusters(plot=p3L, id = "ident", box = T) + NoLegend()
+
+```
+
+
+#### Save labeled clustered Seurat
+```{r}
+# Create .RData object to load at any time
+saveRDS(seurat_clustered_labeled, file=
+          "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratObjects/seurat_clustered_labeled_11.14.22.rds")
+```
+
+
+#### Subset labeled clustersed seurat to keep only Microglia
+```{r}
+# Create UMAP highlighting only the microglia cluster (make all other clusters grey)
+pMicroglia<- DimPlot(object = seurat_clustered_labeled, 
+        reduction = "umap", repel = T, label.box = T, pt.size = .8, cols = c(
+        "grey75",
+        "grey75",
+        "grey75",
+        "grey75",
+        "grey75",
+        "cyan",
+        "grey75",
+        "grey75",
+        "grey75",
+        "grey75",
+        "grey75",
+        "grey75",
+        "grey75",
+        "grey75",
+        "grey75",
+        "grey75",
+        "grey75"))
+pMicroglia + NoLegend()
+
+# Save last plot that was printed
+ggsave("MG_highlight_UMAP_11.15.22.tiff", 
+       path = "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratDataFiles/UMAPs/", 
+       height = 5, 
+       width = 7, 
+       dpi = 500)
+
+# Subset to keep only the microglia cluster
+MG_seurat <- subset(seurat_clustered_labeled,
+                               idents = c("Microglia"),
+                                 invert = FALSE) # invert FALSE here will keep only the selected cluster
+
+# check new subsetted seurat
+DimPlot(object = MG_seurat, reduction = "umap")
+```
+
+
+#### Save the Microglia subsetted Seurat
+```{r}
+# Create .RData object to load at any time
+saveRDS(MG_seurat, file=
+          "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratObjects/MG_seurat_11.3.22.rds")
+```
+
+
+#### Subset labeled clustersed seurat to keep only Neurons
+```{r}
+# Create UMAP highlighting only the Neuron cluster (make all other clusters grey)
+pNeuron<- DimPlot(object = seurat_clustered_labeled, 
+        reduction = "umap", repel = T, label.box = T, pt.size = .8, cols = c(
+        "lightcoral",
+        "lightcoral",
+        "grey75",
+        "lightcoral",
+        "grey75",
+        "grey75",
+        "lightcoral",
+        "lightcoral",
+        "lightcoral",
+        "grey75",
+        "grey75",
+        "lightcoral",
+        "lightcoral",
+        "lightcoral",
+        "grey75",
+        "lightcoral",
+        "grey75"))
+pNeuron + NoLegend()
+
+# Save last plot that was printed
+ggsave("Neuron_highlight_UMAP_11.15.22.tiff", 
+       path = "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratDataFiles/UMAPs/", 
+       height = 5, 
+       width = 7, 
+       dpi = 500)
+
+# Subset to keep only the neuron cluster
+neuron_seurat <- subset(seurat_clustered_labeled,
+                               idents = c(
+                                 "Glutamatergic Neuron 1",
+                                 "Glutamatergic Neuron 2",
+                                 "Glutamatergic Neuron 3",
+                                 "GABAergic Neuron 1",
+                                 "GABAergic Neuron 2",
+                                 "GABAergic Neuron 3",
+                                 "Neuron 1",
+                                 "Neuron 2",
+                                 "Neuron 3",
+                                 "Neuron 4"),
+                                 invert = FALSE) # invert FALSE here will keep only the selected cluster
+
+# check new subsetted seurat
+DimPlot(object = neuron_seurat, reduction = "umap")
+```
+
+
+#### Save the Neuron subsetted Seurat
+```{r}
+# Create .RData object to load at any time
+saveRDS(neuron_seurat, file=
+          "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratObjects/neuron_seurat_11.14.22.rds")
+```
+
+
+#### Move to next scirpt: 5xBOAT_snRNAseq_Subclustering or 5xBOAT_snRNAseq_DE_Analysis
+

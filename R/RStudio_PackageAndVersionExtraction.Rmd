@@ -1,0 +1,23 @@
+---
+title: "RStudio_PackageAndVersionExtraction"
+author: "Joshua Samuels"
+date: "12/04/2022"
+output: html_document
+---
+
+```{r}
+# Creator: Josh Samuels
+# Date Created: June 2021
+
+# Simple code to extract a list of packages and versions loaded into your R package environment
+ip <- as.data.frame(installed.packages()[,c(1,3:4)])
+rownames(ip) <- NULL
+ip <- ip[is.na(ip$Priority),1:2,drop=FALSE]
+print(ip, row.names=FALSE)
+
+# Save the extracted package list. Convert to .xls file
+write.csv(ip, file =  # Your file path here
+            "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratDataFiles/RStudio_Packages_12.4.22.csv")
+
+```
+

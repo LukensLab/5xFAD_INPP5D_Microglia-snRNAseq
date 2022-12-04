@@ -1,0 +1,305 @@
+---
+title: "5xBOAT_snRNAseq_QC_and_Integration"
+author: "Joshua Samuels"
+date: "10/25/2022"
+output: html_document
+---
+
+
+#### Load Packages
+
+```{r, message=FALSE, warning=FALSE}
+# Load Packages
+library(Seurat)
+library(tidyverse)
+library(Matrix)
+library(scales)
+library(cowplot)
+library(RCurl)
+library(ggridges)
+```
+
+
+#### Create Individual Seurat Objects and Merge 
+
+```{r}
+# Create Suerat Object for 5xFAD 
+Ctrl.data <- Read10X(
+  data.dir="D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RivannaOuts/iCR_5xBOAT_count_1/raw_feature_bc_matrix/")
+Ctrl <- CreateSeuratObject(counts = Ctrl.data, project = "5xFAD", min.cells = 3, min.features = 200)
+
+# Create Suerat Object for 5xBOAT
+BOAT.data <- Read10X(
+  data.dir="D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RivannaOuts/iCR_5xBOAT_count_2/raw_feature_bc_matrix/")
+BOAT <- CreateSeuratObject(counts = BOAT.data, project = "5xBOAT", min.cells = 3, min.features = 200)
+
+# Merge Seurat Objects
+merged_seurat <- merge(x = Ctrl,
+                     y = BOAT,
+                     add.cell.id = c("5xFAD", "5xBOAT"))
+
+# Check that the merged object has the appropriate sample-specific prefixes
+merged_seurat
+table(merged_seurat$orig.ident)
+head(merged_seurat@meta.data)
+head(merged_seurat@active.ident)
+```
+
+```{r}
+# Remove original data and Seurat Objects from the environment
+rm(c= BOAT, BOAT.data, Ctrl, Ctrl.data)
+```
+
+#### QC Assessment and Filtering
+
+##### Standard QC assessment from Seurat Pipeline
+
+```{r}
+# calculate the percentage of mitochondrial genes per cell
+merged_seurat[["percent.mt"]] <- PercentageFeatureSet(merged_seurat, pattern = "^mt-")
+
+# plot QC metrics (percent.mt will be super low for snRNAseq data)
+VlnPlot(merged_seurat, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+
+
+##### Acquire additional metrics for QC
+
+```{r}
+# Add number of genes per UMI for each cell to metadata
+merged_seurat$log10GenesPerUMI <- log10(merged_seurat$nFeature_RNA) / log10(merged_seurat$nCount_RNA)
+
+# Compute percent mito ratio
+merged_seurat$mitoRatio <- PercentageFeatureSet(object = merged_seurat, pattern = "^mt-")
+merged_seurat$mitoRatio <- merged_seurat@meta.data$mitoRatio / 100
+
+# Create metadata dataframe
+metadata <- merged_seurat@meta.data
+
+# Add cell IDs to metadata
+metadata$cells <- rownames(metadata)
+
+# Rename columns
+metadata <- metadata %>%
+        dplyr::rename(seq_folder = orig.ident, # new name = old name
+                      nUMI = nCount_RNA, # number of reads
+                      nGene = nFeature_RNA) # number of genes
+
+# sample names for each of the cells based on the cell prefix:
+
+# Create sample column
+metadata$sample <- NA
+metadata$sample[which(str_detect(metadata$cells, "^5xFAD"))] <- "5xFAD"
+metadata$sample[which(str_detect(metadata$cells, "^5xBOAT"))] <- "5xBOAT"
+
+
+# #Create sample number column if working with multiple samples of same condition that were merged together
+# metadata$sample_number <-NA
+# metadata$sample_number[which(str_detect(metadata$cells, "^5xFAD1"))] <- "5xFAD1"
+# metadata$sample_number[which(str_detect(metadata$cells, "^5xFAD2"))] <- "5xFAD2"
+# metadata$sample_number[which(str_detect(metadata$cells, "^5xBOAT1"))] <- "5xBOAT1"
+# metadata$sample_number[which(str_detect(metadata$cells, "^5xBOAT2"))] <- "5xBOAT2"
+
+# Add metadata back to Seurat object
+merged_seurat@meta.data <- metadata
+
+# Check to see if merged_seurat contains the new metadata
+head(merged_seurat@meta.data)
+tail(merged_seurat@meta.data)
+```
+
+##### Additional QC Assessment
+
+```{r,fig.show="hold",out.width="25%"}
+# Visualize the number of cell counts per sample
+metadata %>% 
+  	ggplot(aes(x=sample, fill=sample)) + 
+  	geom_bar() +
+  	theme_classic() +
+  	theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  	theme(plot.title = element_text(hjust=0.5, face="bold")) +
+  	ggtitle("NCells")
+
+# Visualize the number UMIs (transcripts) per cell
+metadata %>% 
+  	ggplot(aes(color=sample, x=nUMI, fill= sample)) + 
+  	geom_density(alpha = 0.2) + 
+  	scale_x_log10() + 
+  	theme_classic() +
+  	ylab("Cell density") +
+  	geom_vline(xintercept = 400)
+
+# Visualize the distribution of genes detected per cell via histogram
+metadata %>% 
+  	ggplot(aes(color=sample, x=nGene, fill= sample)) + 
+  	geom_density(alpha = 0.2) + 
+  	theme_classic() +
+  	scale_x_log10() + 
+  	geom_vline(xintercept = c(300,5000))
+
+# Visualize the distribution of genes detected per cell via boxplot
+metadata %>% 
+  	ggplot(aes(x=sample, y=log10(nGene), fill=sample)) + 
+  	geom_boxplot() + 
+  	theme_classic() +
+  	theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  	theme(plot.title = element_text(hjust=0.5, face="bold")) +
+  	ggtitle("NCells vs NGenes")
+
+# Visualize the correlation between genes detected and number of UMIs and determine whether strong presence of cells with low numbers of genes/UMIs
+metadata %>% 
+  	ggplot(aes(x=nUMI, y=nGene, color=mitoRatio)) + 
+  	geom_point() + 
+	scale_colour_gradient(low = "gray90", high = "black") +
+  	stat_smooth(method=lm) +
+  	scale_x_log10() + 
+  	scale_y_log10() + 
+  	theme_classic() +
+  	geom_vline(xintercept = 400) +
+  	geom_hline(yintercept = 300) +
+  	facet_wrap(~sample)
+
+# Visualize the distribution of mitochondrial gene expression detected per cell - this will be super low for snRNAseq data
+metadata %>% 
+  	ggplot(aes(color=sample, x=mitoRatio, fill=sample)) + 
+  	geom_density(alpha = 0.2) + 
+  	scale_x_log10() + 
+  	theme_classic() +
+  	geom_vline(xintercept = 0.1)
+
+# Visualize the overall complexity of the gene expression by visualizing the genes detected per UMI
+metadata %>%
+  	ggplot(aes(x=log10GenesPerUMI, color = sample, fill=sample)) +
+  	geom_density(alpha = 0.2) +
+  	theme_classic() +
+  	geom_vline(xintercept = 0.8)
+```
+
+
+##### Filtering the merged seurat object
+
+```{r}
+# Filter out low quality reads using selected thresholds
+filtered_seurat <- subset(x = merged_seurat, 
+                         subset= (nUMI >= 400) & # remove nuclei with low reads
+                           (nGene >= 350) & # remove nuclei with low genes per nuclei
+                           (nGene <= 5000) & # remove nuclei with really high genes per nuclei (doublets)
+                           (log10GenesPerUMI > 0.80) & # remove nuclei with low complexity (genes/reads)
+                           (mitoRatio < 0.1)) # remove nuclei with higher mitochondrial genes
+
+# observe filtered seurat object
+filtered_seurat
+table(filtered_seurat$seq_folder)
+head(filtered_seurat@meta.data)
+head(filtered_seurat@active.ident)
+```
+
+```{r}
+# Remove metadata and unfiltered merged seurat object files from the environment
+rm(metadata)
+rm(merged_seurat)
+```
+
+
+#### Save the filtered seurat object
+```{r}
+# Create .RData object to load at any time
+saveRDS(filtered_seurat, file=
+          "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratObjects/filtered_seurat_10.26.22.rds")
+```
+
+<!-- #### Load the filtered seurat object -->
+<!-- ```{r} -->
+<!-- filtered_seurat <-readRDS( -->
+<!--   "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratObjects/filtered_seurat_10.26.22.rds") -->
+<!-- ``` -->
+
+
+<!-- ##### Original Integration Method -->
+
+<!-- ```{r} -->
+<!-- # split the seurat object into a list of two seurat objects (stim and CTRL) -->
+<!-- integration.list <- SplitObject(filtered_seurat, split.by = "sample") -->
+
+<!-- # normalize and identify variable features for each dataset independently -->
+<!-- integration.list <- lapply(X = integration.list, FUN = function(x) { -->
+<!--     x <- NormalizeData(x) -->
+<!--     x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000) -->
+<!-- }) -->
+
+<!-- # select features that are repeatedly variable across seurat objects for integration -->
+<!-- integration.features <- SelectIntegrationFeatures(object.list = integration.list) -->
+
+<!-- # identifies anchors for integration -->
+<!-- integration.anchors <- FindIntegrationAnchors(object.list = integration.list, anchor.features = integration.features) -->
+
+<!-- # this command creates an 'integrated' data assay -->
+<!-- int_seurat <- IntegrateData(anchorset = integration.anchors) -->
+
+<!-- # scale the integrated data -->
+<!-- # scale the data using a linear transformation (‘scaling’) that is a standard pre-processing step prior to dimensional reduction techniques like PCA. The ScaleData() function: (1) Shifts the expression of each gene, so that the mean expression across cells is 0, (2) Scales the expression of each gene, so that the variance across cells is 1 - This step gives equal weight in downstream analyses, so that highly-expressed genes do not dominate -->
+<!-- all.genes <- rownames(int_seurat) -->
+<!-- int_seurat <- ScaleData(int_seurat, features = all.genes) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- # Remove integration prep objects from the environment -->
+<!-- rm(filtered_seurat) -->
+<!-- rm(integration.anchors) -->
+<!-- rm(integration.list) -->
+<!-- rm(integration.features) -->
+<!-- ``` -->
+
+
+<!-- ##### Save integrated seurat object -->
+<!-- ```{r} -->
+<!-- # Create .RData object to load at any time -->
+<!-- saveRDS(int_seurat, file= -->
+<!--           "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratObjects/integrated_seurat_10.27.22.rds") -->
+<!-- ``` -->
+
+
+#### Normalization, Scaling, and Integration with SCTransform Method
+
+```{r}
+# load the sctransfrom package
+library(sctransform)
+
+# split seurat object by sample
+sct.list <-SplitObject(filtered_seurat, split.by = "sample")
+
+# normalize and identify variable features for each seurat object independently
+sct.list <- lapply(X = sct.list, FUN = SCTransform)
+
+# select features that are repeatedly variable across seurat objects for integration
+sct.features <- SelectIntegrationFeatures(object.list = sct.list, nfeatures = 3000)
+
+# pep for integration steps
+sct.list <- PrepSCTIntegration(object.list = sct.list, anchor.features = sct.features)
+
+# identifies anchors for integration - takes a long time!
+sct.anchors <- FindIntegrationAnchors(object.list = sct.list, 
+                                      normalization.method = "SCT", 
+                                      anchor.features = sct.features)
+
+# perform integration
+sct_seurat <- IntegrateData(anchorset = sct.anchors, normalization.method = "SCT")
+```
+
+```{r}
+# Remove SCTransform prep objects from the environment
+rm(filtered_seurat)
+rm(sct.anchors)
+rm(sct.list)
+rm(sct.features)
+```
+
+
+##### Save SCTransform integrated seurat object
+```{r}
+# Create .RData object to load at any time
+saveRDS(sct_seurat, file=
+          "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratObjects/sct_seurat_10.27.22.rds")
+```
+
+#### Move to next scirpt: 5xBOAT_snRNAseq_Clustering

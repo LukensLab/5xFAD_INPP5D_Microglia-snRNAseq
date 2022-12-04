@@ -1,0 +1,112 @@
+---
+title: "5xBOAT_snRNAseq_DE_Analysis"
+author: "Joshua Samuels"
+date: "11/4/2022"
+output: html_document
+---
+
+
+#### Load Packages
+
+```{r, message=FALSE, warning=FALSE}
+# Load Packages
+library(Seurat)
+library(tidyverse)
+library(Matrix)
+library(scales)
+library(cowplot)
+library(RCurl)
+library(ggridges)
+library(BiocManager)
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+library(patchwork)
+library(ggraph)
+library(clustree)
+library(metap)
+library(limma)
+library(DESeq2)
+library(EnhancedVolcano)
+```
+
+
+#### Load Data
+```{r}
+DE_seurat <-readRDS(
+  "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratObjects/MG_seurat_11.3.22.rds")
+
+
+# Use this if continuing from main clustering
+# DE_seurat <- seurat_clustered_labeled
+
+# Use this if continuing from subclustering
+# DE_seurat <- subset_seurat_clustered_labeled
+
+# Or load form another seurat object
+```
+
+
+#### DE Analysis
+```{r}
+# Set assay to RNA
+DefaultAssay(DE_seurat) <- "RNA"
+
+# Add new column to metadata containing the cell type name for each cluster
+DE_seurat$cell_type <- paste(Idents(DE_seurat))
+
+# Add new column to metadata containing cell type name + stim condition
+DE_seurat$cell_type.stim <- paste(DE_seurat$cell_type, DE_seurat$sample, sep = "_")
+
+# Switch ident to cell_type.stim before proceeding with FindMarkers
+Idents(DE_seurat) <- "cell_type.stim"
+```
+
+```{r}
+# Perform this code for each cluster that you are interested in comparing - change the ident.1, ident.2, Cluster_ID, and samve name
+
+# Determine DE genes
+DE_Markers<- FindMarkers(DE_seurat, ident.1 = "Microglia_5xBOAT", ident.2 = "Microglia_5xFAD", test.use = "DESeq2", assay = "RNA")
+# Reformat table
+DE_Markers <- tibble::rownames_to_column(DE_Markers, "#Gene")
+# Add new column to metadata
+DE_Markers$cluster_ID <- "Microglia"
+
+# export list as .csv
+write.csv(DE_Markers, file =
+            "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratDataFiles/de_Microglia_res0.1_11.15.22.csv")
+```
+
+
+#### DE Visualization
+```{r}
+# subset to include only significant genes (can change parameters based on DE_Markers input)
+DE_Markers.subset <- subset(DE_Markers, p_val_adj < 1e-5)
+DE_Markers.subset <- subset(DE_Markers.subset, avg_log2FC < -.20 | avg_log2FC > .20)
+
+pVolcano <- EnhancedVolcano(DE_Markers.subset, 
+                lab = DE_Markers.subset$`#Gene`, # can add specific genes here
+                selectLab = c("Apbb1ip", "Cd84", "Itgam","Pelk", "C1qb", "Trem2", "Vav1", "Plcg2", "Hif1a", "Ppard", "Arsb", "Lrmda", "Ctsd", "Myo1e", "Ly86", "Ctsb", "Csf3r", "Dock2", "Cd180", "Tgfbr2", "Inpp5d", "Pi3kr1", "Nfkb1", "Tgfbr1", "Smad3", "Akt3", "Map4k4", "Prkcb", "Nrxn3", "Qk", "Xist", "Zeb2", "Elmo1"),
+                x = "avg_log2FC", 
+                y = "p_val_adj", 
+                FCcutoff = .20,
+                col = c("red3", "red3", "red3", "mediumorchid1"), 
+                colAlpha = .5,
+                labSize = 4,
+                pointSize = 3,
+                xlim = c(-2.1, 1),
+                drawConnectors = T,
+                maxoverlaps = 100
+                )
+pVolcano
+```
+
+```{r}
+# Save last plot that was printed
+# Before saving, set your size and dpi (quality)
+# ggsave("FileName.FileType", path = "path/path", width = , height = , units = "cm", dpi = 500)
+
+ggsave("5xBOATvs5xFAD_DEVolcano_11.30.22.tiff", 
+       path = "D:/Research/UVA_NGP_PhD/Lukens_Lab/Experiments/BOAT_MG_KO/Phenotype_Exploration/snRNAseq/RStudio_SeuratDataFiles/Volcano_Plots/", 
+       dpi = 500)
+```
