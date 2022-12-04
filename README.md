@@ -4,7 +4,7 @@ Workflow and R code used for the analysis of snRNAseq data comparing 5xFAD INPP5
 R code provided. Two experimental groups: 5xFAD INPP5D Microglia (5xBOAT) and 5xFAD.
 
 
-The R folder contains the R code used in the workflow to process and analyze the 5xBOAT and 5xFAD snRNAseq samples. The full list of packages and versions at the time the analysis was conduced can be found in the RStudio_Packages_and_Versions file.
+The R folder contains the R code used in the workflow to process and analyze the 5xBOAT and 5xFAD snRNAseq samples. The full list of packages and versions at the time the analysis was conduced can be found in the RStudio_Packages_and_Versions.xlsx file.
 
 
 ## Mouse INPP5D snRNAseq workflow:
